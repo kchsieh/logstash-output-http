@@ -4,9 +4,11 @@ require "logstash/namespace"
 require "logstash/json"
 require "uri"
 require "logstash/plugin_mixins/http_client"
+require "stud/buffer"
 
 class LogStash::Outputs::Http < LogStash::Outputs::Base
   include LogStash::PluginMixins::HttpClient
+  include Stud::Buffer
 
   VALID_METHODS = ["put", "post", "patch", "delete", "get", "head"]
 
@@ -64,6 +66,18 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
 
   config :message, :validate => :string
 
+  # If true, multiple number of POST requests will be batched every "batch_events" events or
+  # "batch_timeout" seconds (whichever comes first).
+  # Only supported for POST requests.
+  config :batch, :validate => :boolean, :default => false
+
+  # If batch is set to true, the number of events we queue up for a POST request.
+  config :batch_events, :validate => :number, :default => 3
+
+  # If batch is set to true, the maximum amount of time between POST requests
+  # when there are pending events to flush.
+  config :batch_timeout, :validate => :number, :default => 5
+
   def register
     # Handle this deprecated option. TODO: remove the option
     @ssl_certificate_validation = @verify_ssl if @verify_ssl
@@ -75,6 +89,18 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
     # tokens must be added back by the client on success
     @request_tokens = SizedQueue.new(@pool_max)
     @pool_max.times {|t| @request_tokens << true }
+
+    if @batch
+      if @http_method.to_s != 'post'
+        raise RuntimeError.new("batch is not supported with http_method #{@http_method}")
+      end
+      buffer_initialize(
+          :max_items => @batch_events,
+          :max_interval => @batch_timeout,
+          :logger => @logger
+      )
+      @batched_requests = Array.new
+    end
 
     @requests = Array.new
 
@@ -104,15 +130,52 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
   # This will make performance much easier to reason about, and more importantly let us guarantee
   # that if `multi_receive` returns all items have been sent.
   def receive(event, async_type=:background)
-    body = event_body(event)
+    if @batch
+      buffer_receive(event)
+      @headers = event_headers(event)
+      return
+    end
 
+    body = event_body(event)
+    url = event.sprintf(@url)
+    headers = event_headers(event)
+    send_request(headers, url, body, async_type)
+  end
+
+  def flush(events, key, close=false)
+    # Combine multiple events
+    body = Array.new
+    events.each do |event|
+      url = event.sprintf(@url) if event == events.first
+      body << event_body(event)
+    end
+
+    # Send one request
+    send_request(@headers, url, body)
+  end
+
+  # called from Stud::Buffer#buffer_flush when an error occurs
+  def on_flush_error(e)
+    @logger.warn("Failed to send backlog of events",
+                 :exception => e,
+                 :backtrace => e.backtrace
+    )
+  end
+
+  def close
+    if @batch
+      buffer_flush(:final => true)
+    end
+    client.close
+  end
+
+  private
+
+  def send_request(headers, url, body, async_type=:background)
     # Block waiting for a token
     token = @request_tokens.pop if async_type == :background
 
     # Send the request
-    url = event.sprintf(@url)
-    headers = event_headers(event)
-
     # Create an async request
     request = client.send(async_type).send(@http_method, url, :body => body, :headers => headers)
 
@@ -124,10 +187,10 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
     request.on_success do |response|
       if response.code < 200 || response.code > 299
         log_failure(
-          "Encountered non-200 HTTP code #{200}",
-          :response_code => response.code,
-          :url => url,
-          :event => event)
+            "Encountered non-200 HTTP code #{200}",
+            :response_code => response.code,
+            :url => url,
+            :event => event)
       end
     end
 
@@ -145,12 +208,6 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
 
     request.call if async_type == :background
   end
-
-  def close
-    client.close
-  end
-
-  private
 
   # This is split into a separate method mostly to help testing
   def log_failure(message, opts)
