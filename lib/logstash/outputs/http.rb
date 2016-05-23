@@ -99,7 +99,6 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
           :max_interval => @batch_timeout,
           :logger => @logger
       )
-      @batched_requests = Array.new
     end
 
     @requests = Array.new
