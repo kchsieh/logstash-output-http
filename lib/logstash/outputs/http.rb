@@ -150,7 +150,7 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
     end
 
     # Send one request
-    send_request(@headers, url, body)
+    send_request(@headers, url, {"messages" => body})
   end
 
   # called from Stud::Buffer#buffer_flush when an error occurs
