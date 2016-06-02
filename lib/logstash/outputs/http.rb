@@ -5,6 +5,7 @@ require "logstash/json"
 require "uri"
 require "logstash/plugin_mixins/http_client"
 require "stud/buffer"
+require "json"
 
 class LogStash::Outputs::Http < LogStash::Outputs::Base
   include LogStash::PluginMixins::HttpClient
@@ -101,8 +102,6 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
       )
     end
 
-    @requests = Array.new
-
     if @content_type.nil?
       case @format
         when "form" ; @content_type = "application/x-www-form-urlencoded"
@@ -130,6 +129,19 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
   # that if `multi_receive` returns all items have been sent.
   def receive(event, async_type=:background)
     if @batch
+      event.to_hash.delete('geoip')
+      event.to_hash.delete('@version')
+      event['text'] = event.to_hash.delete('@message') if event['@message']
+      event['text'] = event.to_hash.delete('message') if event['message']
+      event['timestamp'] = event.to_hash.delete('@timestamp') if event['@timestamp']
+      event['timestamp'] = event['timestamp'].to_i
+      fields = Array.new
+      event.to_hash.each do |k, v|
+        fields << {'name'=>k,'content'=>v}
+      end
+      event['fields'] = fields
+      fields.each {|x| event.to_hash.delete(x['name']) unless x['name'] == 'text' or x['name'] == 'timestamp'}
+
       buffer_receive(event)
       @headers = event_headers(event)
       return
@@ -146,11 +158,11 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
     body = Array.new
     events.each do |event|
       url = event.sprintf(@url) if event == events.first
-      body << event_body(event)
+      body << JSON.parse(event_body(event))
     end
 
     # Send one request
-    send_request(@headers, url, {"messages" => body})
+    send_request(@headers, url, "{\"messages\":#{body}}".gsub('=>',':'))
   end
 
   # called from Stud::Buffer#buffer_flush when an error occurs
