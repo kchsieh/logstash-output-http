@@ -154,6 +154,8 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
   end
 
   def flush(events, key, close=false)
+    @logger.info("***flush")
+    @sent = false
     # Combine multiple events
     body = Array.new
     events.each do |event|
@@ -177,15 +179,18 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
     if @batch
       buffer_flush(:final => true)
     end
+    while defined? @sent and not @sent do
+      sleep(0.1)
+    end
     client.close
+    @logger.info("***worker closed")
   end
 
   private
 
   def send_request(headers, url, body, async_type=:background)
+    @logger.info("***  send request")
     # Block waiting for a token
-    @logger.warn("***send request")
-    @logger.warn("    body=***#{body}***")
     token = @request_tokens.pop if async_type == :background
 
     # Send the request
@@ -193,8 +198,10 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
     request = client.send(async_type).send(@http_method, url, :body => body, :headers => headers)
 
     request.on_complete do
+      @logger.info("***   request complete")
       # Make sure we return the token to the pool
       @request_tokens << token  if async_type == :background
+      @sent = true
     end
 
     request.on_success do |response|
