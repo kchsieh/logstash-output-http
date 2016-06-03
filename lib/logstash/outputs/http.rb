@@ -67,6 +67,10 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
 
   config :message, :validate => :string
 
+  # If vmware is set to true, input event will be formatted based on vmware spec.:
+  #  http://pubs.vmware.com/log-insight-33/index.jsp?topic=%2Fcom.vmware.log-insight.developer.doc%2FGUID-01C38893-118A-451F-90D6-66F33F6CA26A.html
+  config :vmware, :validate => :boolean, :default => false
+
   # If true, multiple number of POST requests will be batched every "batch_events" events or
   # "batch_timeout" seconds (whichever comes first).
   # Only supported for POST requests.
@@ -128,18 +132,20 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
   # This will make performance much easier to reason about, and more importantly let us guarantee
   # that if `multi_receive` returns all items have been sent.
   def receive(event, async_type=:background)
-    event.to_hash.delete('geoip')
-    event.to_hash.delete('@version')
-    event['text'] = event.to_hash.delete('@message') if event['@message']
-    event['text'] = event.to_hash.delete('message') if event['message']
-    event['timestamp'] = event.to_hash.delete('@timestamp') if event['@timestamp']
-    event['timestamp'] = event['timestamp'].to_i
-    fields = Array.new
-    event.to_hash.each do |k, v|
-      fields << {'name'=>k,'content'=>v}
+    if @vmware
+      event.to_hash.delete('geoip')
+      event.to_hash.delete('@version')
+      event['text'] = event.to_hash.delete('@message') if event['@message']
+      event['text'] = event.to_hash.delete('message') if event['message']
+      event['timestamp'] = event.to_hash.delete('@timestamp') if event['@timestamp']
+      event['timestamp'] = event['timestamp'].to_i
+      fields = Array.new
+      event.to_hash.each do |k, v|
+        fields << {'name'=>k,'content'=>v}
+      end
+      event['fields'] = fields
+      fields.each {|x| event.to_hash.delete(x['name']) unless x['name'] == 'text' or x['name'] == 'timestamp'}
     end
-    event['fields'] = fields
-    fields.each {|x| event.to_hash.delete(x['name']) unless x['name'] == 'text' or x['name'] == 'timestamp'}
 
     if @batch
       buffer_receive(event)
