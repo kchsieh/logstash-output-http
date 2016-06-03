@@ -128,20 +128,20 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
   # This will make performance much easier to reason about, and more importantly let us guarantee
   # that if `multi_receive` returns all items have been sent.
   def receive(event, async_type=:background)
-    if @batch
-      event.to_hash.delete('geoip')
-      event.to_hash.delete('@version')
-      event['text'] = event.to_hash.delete('@message') if event['@message']
-      event['text'] = event.to_hash.delete('message') if event['message']
-      event['timestamp'] = event.to_hash.delete('@timestamp') if event['@timestamp']
-      event['timestamp'] = event['timestamp'].to_i
-      fields = Array.new
-      event.to_hash.each do |k, v|
-        fields << {'name'=>k,'content'=>v}
-      end
-      event['fields'] = fields
-      fields.each {|x| event.to_hash.delete(x['name']) unless x['name'] == 'text' or x['name'] == 'timestamp'}
+    event.to_hash.delete('geoip')
+    event.to_hash.delete('@version')
+    event['text'] = event.to_hash.delete('@message') if event['@message']
+    event['text'] = event.to_hash.delete('message') if event['message']
+    event['timestamp'] = event.to_hash.delete('@timestamp') if event['@timestamp']
+    event['timestamp'] = event['timestamp'].to_i
+    fields = Array.new
+    event.to_hash.each do |k, v|
+      fields << {'name'=>k,'content'=>v}
+    end
+    event['fields'] = fields
+    fields.each {|x| event.to_hash.delete(x['name']) unless x['name'] == 'text' or x['name'] == 'timestamp'}
 
+    if @batch
       buffer_receive(event)
       @headers = event_headers(event)
       return
@@ -184,6 +184,8 @@ class LogStash::Outputs::Http < LogStash::Outputs::Base
 
   def send_request(headers, url, body, async_type=:background)
     # Block waiting for a token
+    @logger.warn("***send request")
+    @logger.warn("    body=***#{body}***")
     token = @request_tokens.pop if async_type == :background
 
     # Send the request
